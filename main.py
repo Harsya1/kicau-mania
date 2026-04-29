@@ -26,7 +26,7 @@ MODEL_URL = (
 CAMERA_INDEX = 0
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
-FRAME_FPS = 30
+FRAME_FPS = 120
 MIRROR_VIEW = True
 
 NOSE_LANDMARK_INDEX = 1
@@ -40,6 +40,7 @@ WAVE_MIN_MOVE_NORM = 0.008
 WAVE_MIN_AMPLITUDE_NORM = 0.12
 WAVE_MIN_SWINGS = 2
 WAVE_ACTIVE_SEC = 0.7
+WAVE_MAX_VERTICAL_DRIFT_NORM = 0.06
 
 GIF_WIDTH_RATIO = 0.28
 GIF_MARGIN = 20
@@ -180,27 +181,36 @@ class WaveDetector:
         window_frames: int,
         min_move: float,
         min_amplitude: float,
+        max_vertical_drift: float,
         min_swings: int,
         active_sec: float,
     ) -> None:
         self.x_hist: deque[float] = deque(maxlen=window_frames)
+        self.y_hist: deque[float] = deque(maxlen=window_frames)
         self.last_wave_time: float | None = None
         self.min_move = min_move
         self.min_amplitude = min_amplitude
+        self.max_vertical_drift = max_vertical_drift
         self.min_swings = min_swings
         self.active_sec = active_sec
 
     def reset(self) -> None:
         self.x_hist.clear()
+        self.y_hist.clear()
         self.last_wave_time = None
 
-    def update(self, x: float, t: float) -> None:
+    def update(self, x: float, y: float, t: float) -> None:
         self.x_hist.append(x)
+        self.y_hist.append(y)
         if len(self.x_hist) < 4:
             return
 
         amp = max(self.x_hist) - min(self.x_hist)
         if amp < self.min_amplitude:
+            return
+
+        vertical_drift = max(self.y_hist) - min(self.y_hist)
+        if vertical_drift > self.max_vertical_drift:
             return
 
         direction = 0
@@ -346,10 +356,11 @@ def main() -> None:
 
     model_ok, model_error = ensure_model_file(model_path)
 
-    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FRAME_FPS)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     if not model_ok:
         print(model_error or "Model download failed")
@@ -364,6 +375,7 @@ def main() -> None:
         window_frames=WAVE_WINDOW_FRAMES,
         min_move=WAVE_MIN_MOVE_NORM,
         min_amplitude=WAVE_MIN_AMPLITUDE_NORM,
+        max_vertical_drift=WAVE_MAX_VERTICAL_DRIFT_NORM,
         min_swings=WAVE_MIN_SWINGS,
         active_sec=WAVE_ACTIVE_SEC,
     )
@@ -402,10 +414,10 @@ def main() -> None:
             left_palm_smoothed = None
 
         if right_lms:
-            wrist_raw = (right_lms[0].x, right_lms[0].y)
-            right_wrist_smoothed = smooth_point(right_wrist_smoothed, wrist_raw, SMOOTHING_ALPHA)
+            palm_raw = palm_center_norm(right_lms)
+            right_wrist_smoothed = smooth_point(right_wrist_smoothed, palm_raw, SMOOTHING_ALPHA)
             if right_wrist_smoothed is not None:
-                wave_detector.update(right_wrist_smoothed[0], now)
+                wave_detector.update(right_wrist_smoothed[0], right_wrist_smoothed[1], now)
         else:
             right_wrist_smoothed = None
             wave_detector.reset()

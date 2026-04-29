@@ -13,8 +13,8 @@ from PIL import Image, ImageSequence
 import pygame
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
-AUDIO_FILE = "audio.mp3"
-GIF_FILE = "overlay.gif"
+AUDIO_FILE = "kicau-mania.mp3"
+GIF_FILE = "kicau-mania.gif"
 
 CAMERA_INDEX = 0
 FRAME_WIDTH = 1280
@@ -25,8 +25,8 @@ MIRROR_VIEW = False
 NOSE_LANDMARK_INDEX = 1
 SMOOTHING_ALPHA = 0.6
 
-COVER_DISTANCE_NORM = 0.10
-COVER_BBOX_MARGIN_NORM = 0.02
+COVER_DISTANCE_NORM = 0.05
+COVER_BBOX_MARGIN_NORM = 0.01
 
 WAVE_WINDOW_FRAMES = 18
 WAVE_MIN_MOVE_NORM = 0.008

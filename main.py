@@ -383,13 +383,13 @@ def main() -> None:
                 mp_drawing.draw_landmarks(
                     output,
                     results.left_hand_landmarks,
-                    mp_holistic.HAND_CONNECTIONS,
+                    mp.solutions.hands.HAND_CONNECTIONS,
                 )
             if results.right_hand_landmarks:
                 mp_drawing.draw_landmarks(
                     output,
                     results.right_hand_landmarks,
-                    mp_holistic.HAND_CONNECTIONS,
+                    mp.solutions.hands.HAND_CONNECTIONS,
                 )
 
             nose_px = normalized_to_pixel(nose_smoothed, w, h)

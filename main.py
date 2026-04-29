@@ -5,10 +5,10 @@ import time
 from bisect import bisect_left
 from collections import deque
 from pathlib import Path
+from urllib.request import urlretrieve
 
 import cv2
 import mediapipe as mp
-from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import numpy as np
 from PIL import Image, ImageSequence
@@ -17,6 +17,11 @@ import pygame
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 AUDIO_FILE = "kicau-mania.mp3"
 GIF_FILE = "kicau-mania.gif"
+MODEL_FILE = "holistic_landmarker.task"
+MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/holistic_landmarker/"
+    "holistic_landmarker/float16/1/holistic_landmarker.task"
+)
 
 CAMERA_INDEX = 0
 FRAME_WIDTH = 1280
@@ -148,6 +153,23 @@ class GifOverlay:
         if rgba is None:
             return
         overlay_rgba(frame_bgr, rgba, x, y)
+
+
+def ensure_model_file(model_path: Path) -> tuple[bool, str | None]:
+    if model_path.exists() and model_path.stat().st_size > 0:
+        return True, None
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = model_path.with_suffix(model_path.suffix + ".download")
+
+    try:
+        urlretrieve(MODEL_URL, temp_path)
+        temp_path.replace(model_path)
+        return True, None
+    except Exception as exc:  # noqa: BLE001
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        return False, f"Model download failed: {exc}"
 
 
 class WaveDetector:
@@ -305,9 +327,14 @@ def draw_hand_landmarks(frame: np.ndarray, landmarks: list | None) -> None:
         cv2.circle(frame, pt, 3, (255, 0, 0), -1)
 
 
+def create_holistic_landmarker(model_path: Path):
+    return vision.HolisticLandmarker.create_from_model_path(str(model_path))
+
+
 def main() -> None:
     audio_path = ASSETS_DIR / AUDIO_FILE
     gif_path = ASSETS_DIR / GIF_FILE
+    model_path = ASSETS_DIR / MODEL_FILE
 
     audio = AudioController(audio_path)
     audio_ok = audio.setup()
@@ -315,20 +342,21 @@ def main() -> None:
     gif_overlay = GifOverlay(gif_path, GIF_WIDTH_RATIO)
     gif_ok = gif_overlay.load()
 
+    model_ok, model_error = ensure_model_file(model_path)
+
     cap = cv2.VideoCapture(CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FRAME_FPS)
 
-    # Setup MediaPipe Holistic with Tasks API
-    base_options = python.BaseOptions(model_asset_path=None)
-    options = vision.HolisticLandmarkerOptions(
-        base_options=base_options,
-        output_face_landmarks=True,
-        output_pose_landmarks=False,
-        output_segmentation_masks=False,
-    )
-    detector = vision.HolisticLandmarker.create_from_options(options)
+    if not model_ok:
+        print(model_error or "Model download failed")
+        cap.release()
+        cv2.destroyAllWindows()
+        audio.close()
+        return
+
+    detector = create_holistic_landmarker(model_path)
 
     wave_detector = WaveDetector(
         window_frames=WAVE_WINDOW_FRAMES,
@@ -351,7 +379,6 @@ def main() -> None:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w = frame.shape[:2]
 
-        # Convert to MediaPipe Image
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
         results = detector.detect(mp_image)
 

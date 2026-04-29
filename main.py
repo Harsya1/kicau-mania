@@ -27,7 +27,7 @@ CAMERA_INDEX = 0
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 FRAME_FPS = 30
-MIRROR_VIEW = False
+MIRROR_VIEW = True
 
 NOSE_LANDMARK_INDEX = 1
 SMOOTHING_ALPHA = 0.6
@@ -464,6 +464,9 @@ def main() -> None:
             status_lines.append(audio.error or "Audio: unavailable")
         if not gif_ok:
             status_lines.append(gif_overlay.error or "GIF: unavailable")
+
+        if MIRROR_VIEW:
+            output = cv2.flip(output, 1)
 
         draw_status(output, status_lines)
 

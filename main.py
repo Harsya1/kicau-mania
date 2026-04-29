@@ -8,6 +8,8 @@ from pathlib import Path
 
 import cv2
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import numpy as np
 from PIL import Image, ImageSequence
 import pygame
@@ -275,6 +277,34 @@ def draw_status(frame: np.ndarray, lines: list[str]) -> None:
         y += 22
 
 
+def draw_hand_landmarks(frame: np.ndarray, landmarks: list | None) -> None:
+    if landmarks is None:
+        return
+    h, w = frame.shape[:2]
+    
+    HAND_CONNECTIONS = [
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        (0, 5), (5, 6), (6, 7), (7, 8),
+        (5, 9), (9, 10), (10, 11), (11, 12),
+        (9, 13), (13, 14), (14, 15), (15, 16),
+        (13, 17), (17, 18), (18, 19), (19, 20),
+        (0, 17),
+    ]
+    
+    for connection in HAND_CONNECTIONS:
+        start_idx, end_idx = connection
+        if start_idx < len(landmarks) and end_idx < len(landmarks):
+            start_lm = landmarks[start_idx]
+            end_lm = landmarks[end_idx]
+            start_pt = (int(start_lm.x * w), int(start_lm.y * h))
+            end_pt = (int(end_lm.x * w), int(end_lm.y * h))
+            cv2.line(frame, start_pt, end_pt, (0, 255, 0), 2)
+    
+    for lm in landmarks:
+        pt = (int(lm.x * w), int(lm.y * h))
+        cv2.circle(frame, pt, 3, (255, 0, 0), -1)
+
+
 def main() -> None:
     audio_path = ASSETS_DIR / AUDIO_FILE
     gif_path = ASSETS_DIR / GIF_FILE
@@ -290,8 +320,15 @@ def main() -> None:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FRAME_FPS)
 
-    mp_holistic = mp.solutions.holistic
-    mp_drawing = mp.solutions.drawing_utils
+    # Setup MediaPipe Holistic with Tasks API
+    base_options = python.BaseOptions(model_asset_path=None)
+    options = vision.HolisticLandmarkerOptions(
+        base_options=base_options,
+        output_face_landmarks=True,
+        output_pose_landmarks=False,
+        output_segmentation_masks=False,
+    )
+    detector = vision.HolisticLandmarker.create_from_options(options)
 
     wave_detector = WaveDetector(
         window_frames=WAVE_WINDOW_FRAMES,
@@ -305,129 +342,113 @@ def main() -> None:
     left_palm_smoothed: tuple[float, float] | None = None
     right_wrist_smoothed: tuple[float, float] | None = None
 
-    with mp_holistic.Holistic(
-        static_image_mode=False,
-        model_complexity=1,
-        smooth_landmarks=True,
-        refine_face_landmarks=False,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as holistic:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-            now = time.time()
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_rgb.flags.writeable = False
-            results = holistic.process(frame_rgb)
-            frame_rgb.flags.writeable = True
+        now = time.time()
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w = frame.shape[:2]
 
-            output = frame.copy()
-            h, w = output.shape[:2]
+        # Convert to MediaPipe Image
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        results = detector.detect(mp_image)
 
-            left_lms = results.left_hand_landmarks.landmark if results.left_hand_landmarks else None
-            right_lms = results.right_hand_landmarks.landmark if results.right_hand_landmarks else None
+        output = frame.copy()
 
-            if results.face_landmarks and len(results.face_landmarks.landmark) > NOSE_LANDMARK_INDEX:
-                nose_lm = results.face_landmarks.landmark[NOSE_LANDMARK_INDEX]
-                nose_smoothed = smooth_point(nose_smoothed, (nose_lm.x, nose_lm.y), SMOOTHING_ALPHA)
-            else:
-                nose_smoothed = None
+        left_lms = results.left_hand_landmarks if results.left_hand_landmarks else None
+        right_lms = results.right_hand_landmarks if results.right_hand_landmarks else None
 
-            if left_lms:
-                palm_raw = palm_center_norm(left_lms)
-                left_palm_smoothed = smooth_point(left_palm_smoothed, palm_raw, SMOOTHING_ALPHA)
-            else:
-                left_palm_smoothed = None
+        if results.face_landmarks and len(results.face_landmarks) > NOSE_LANDMARK_INDEX:
+            nose_lm = results.face_landmarks[NOSE_LANDMARK_INDEX]
+            nose_smoothed = smooth_point(nose_smoothed, (nose_lm.x, nose_lm.y), SMOOTHING_ALPHA)
+        else:
+            nose_smoothed = None
 
-            if right_lms:
-                wrist_raw = (right_lms[0].x, right_lms[0].y)
-                right_wrist_smoothed = smooth_point(right_wrist_smoothed, wrist_raw, SMOOTHING_ALPHA)
-                if right_wrist_smoothed is not None:
-                    wave_detector.update(right_wrist_smoothed[0], now)
-            else:
-                right_wrist_smoothed = None
-                wave_detector.reset()
+        if left_lms:
+            palm_raw = palm_center_norm(left_lms)
+            left_palm_smoothed = smooth_point(left_palm_smoothed, palm_raw, SMOOTHING_ALPHA)
+        else:
+            left_palm_smoothed = None
 
-            covering_nose = False
-            if nose_smoothed and left_palm_smoothed and left_lms:
-                bbox = hand_bbox_norm(left_lms)
-                in_box = False
-                if bbox:
-                    min_x, min_y, max_x, max_y = bbox
-                    margin = COVER_BBOX_MARGIN_NORM
-                    in_box = (
-                        (min_x - margin) <= nose_smoothed[0] <= (max_x + margin)
-                        and (min_y - margin) <= nose_smoothed[1] <= (max_y + margin)
-                    )
-                dist = math.hypot(
-                    nose_smoothed[0] - left_palm_smoothed[0],
-                    nose_smoothed[1] - left_palm_smoothed[1],
+        if right_lms:
+            wrist_raw = (right_lms[0].x, right_lms[0].y)
+            right_wrist_smoothed = smooth_point(right_wrist_smoothed, wrist_raw, SMOOTHING_ALPHA)
+            if right_wrist_smoothed is not None:
+                wave_detector.update(right_wrist_smoothed[0], now)
+        else:
+            right_wrist_smoothed = None
+            wave_detector.reset()
+
+        covering_nose = False
+        if nose_smoothed and left_palm_smoothed and left_lms:
+            bbox = hand_bbox_norm(left_lms)
+            in_box = False
+            if bbox:
+                min_x, min_y, max_x, max_y = bbox
+                margin = COVER_BBOX_MARGIN_NORM
+                in_box = (
+                    (min_x - margin) <= nose_smoothed[0] <= (max_x + margin)
+                    and (min_y - margin) <= nose_smoothed[1] <= (max_y + margin)
                 )
-                covering_nose = in_box or (dist <= COVER_DISTANCE_NORM)
+            dist = math.hypot(
+                nose_smoothed[0] - left_palm_smoothed[0],
+                nose_smoothed[1] - left_palm_smoothed[1],
+            )
+            covering_nose = in_box or (dist <= COVER_DISTANCE_NORM)
 
-            wave_active = wave_detector.is_active(now)
-            trigger_active = covering_nose and wave_active
+        wave_active = wave_detector.is_active(now)
+        trigger_active = covering_nose and wave_active
 
-            if trigger_active:
-                audio.start()
-            else:
-                audio.stop()
+        if trigger_active:
+            audio.start()
+        else:
+            audio.stop()
 
-            if gif_ok and not gif_overlay.ready:
-                gif_overlay.prepare(w)
+        if gif_ok and not gif_overlay.ready:
+            gif_overlay.prepare(w)
 
-            if results.left_hand_landmarks:
-                mp_drawing.draw_landmarks(
-                    output,
-                    results.left_hand_landmarks,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                )
-            if results.right_hand_landmarks:
-                mp_drawing.draw_landmarks(
-                    output,
-                    results.right_hand_landmarks,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                )
+        draw_hand_landmarks(output, left_lms)
+        draw_hand_landmarks(output, right_lms)
 
-            nose_px = normalized_to_pixel(nose_smoothed, w, h)
-            if nose_px:
-                cv2.circle(output, nose_px, 6, (0, 255, 255), -1)
+        nose_px = normalized_to_pixel(nose_smoothed, w, h)
+        if nose_px:
+            cv2.circle(output, nose_px, 6, (0, 255, 255), -1)
 
-            if trigger_active and gif_overlay.ready:
-                gif_overlay.draw(output, now, GIF_MARGIN, GIF_MARGIN)
+        if trigger_active and gif_overlay.ready:
+            gif_overlay.draw(output, now, GIF_MARGIN, GIF_MARGIN)
 
-            status_lines = [
-                f"Left cover: {covering_nose}",
-                f"Right wave: {wave_active}",
-                f"Trigger: {trigger_active}",
-                "Press Q to quit",
-            ]
-            if not results.face_landmarks:
-                status_lines.append("Face: not detected")
-            if not results.left_hand_landmarks:
-                status_lines.append("Left hand: not detected")
-            if not results.right_hand_landmarks:
-                status_lines.append("Right hand: not detected")
-            if not audio_ok:
-                status_lines.append(audio.error or "Audio: unavailable")
-            if not gif_ok:
-                status_lines.append(gif_overlay.error or "GIF: unavailable")
+        status_lines = [
+            f"Left cover: {covering_nose}",
+            f"Right wave: {wave_active}",
+            f"Trigger: {trigger_active}",
+            "Press Q to quit",
+        ]
+        if not results.face_landmarks:
+            status_lines.append("Face: not detected")
+        if not results.left_hand_landmarks:
+            status_lines.append("Left hand: not detected")
+        if not results.right_hand_landmarks:
+            status_lines.append("Right hand: not detected")
+        if not audio_ok:
+            status_lines.append(audio.error or "Audio: unavailable")
+        if not gif_ok:
+            status_lines.append(gif_overlay.error or "GIF: unavailable")
 
-            draw_status(output, status_lines)
+        draw_status(output, status_lines)
 
-            if MIRROR_VIEW:
-                output = cv2.flip(output, 1)
+        if MIRROR_VIEW:
+            output = cv2.flip(output, 1)
 
-            cv2.imshow("Kicau Mania", output)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+        cv2.imshow("Kicau Mania", output)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
 
     cap.release()
     cv2.destroyAllWindows()
     audio.close()
+    detector.close()
 
 
 if __name__ == "__main__":

@@ -101,10 +101,12 @@ class GifOverlay:
             return False
         try:
             gif = Image.open(self.gif_path)
+            canvas = Image.new("RGBA", gif.size, (0, 0, 0, 0))
             for frame in ImageSequence.Iterator(gif):
                 rgba = frame.convert("RGBA")
+                canvas = Image.alpha_composite(canvas, rgba)
                 duration_ms = frame.info.get("duration", 100)
-                self.frames.append(rgba)
+                self.frames.append(canvas.copy())
                 self.durations.append(max(duration_ms, 20) / 1000.0)
             if not self.frames:
                 self.error = "GIF has no frames"
@@ -464,9 +466,6 @@ def main() -> None:
             status_lines.append(gif_overlay.error or "GIF: unavailable")
 
         draw_status(output, status_lines)
-
-        if MIRROR_VIEW:
-            output = cv2.flip(output, 1)
 
         cv2.imshow("Kicau Mania", output)
         if cv2.waitKey(1) & 0xFF == ord("q"):

@@ -3,6 +3,8 @@
 Ringkasan
 - Aplikasi Python sederhana untuk mendeteksi titik hidung dan skeleton kedua telapak tangan menggunakan MediaPipe Tasks API.
 - Saat tangan kiri menutup ujung hidung dan tangan kanan mengibaskan horizontal, aplikasi akan memutar audio (loop) dan menampilkan GIF overlay.
+- Preview kamera tampil normal, tidak mirror.
+- Aset GIF transparan didukung; overlay akan mengikuti alpha channel dari file aset.
 
 Persyaratan
 - Python 3.13 (direkomendasikan)
